@@ -1,7 +1,7 @@
 package main
 
 import (
-	"bufio"
+	//"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/icza/backscanner"
 )
 
 // Month constants
@@ -28,8 +30,6 @@ var months = map[string]time.Month{
 	"Nov": 11,
 	"Dec": 12,
 }
-
-
 
 // LogEntry ...
 type LogEntry struct {
@@ -58,15 +58,24 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open: %s", *filePtr)
 	}
-
-	scanner := bufio.NewScanner(file)
-	scanner.Split(bufio.ScanLines)
-	var text []string
-	for scanner.Scan() {
-		text = append(text, scanner.Text())
+	fi, err := file.Stat()
+	if err != nil {
+		log.Fatalf("cannot get file info: %v", err)
 	}
+	defer file.Close()
 
-	file.Close()
+	// use backscanner package since logs are stored in reverse chronological order in log file.
+	// backscanner reads lines from end of file to start of file, thus placing the lines in chronological order
+	scanner := backscanner.New(file, int(fi.Size()))
+	var text []string
+
+	for {
+		line, _, err := scanner.Line()
+		if err != nil {
+			break
+		}
+		text = append(text, line)
+	}
 
 	/*
 	   regexp match groups
@@ -80,8 +89,8 @@ func main() {
 	   10 - Latitude
 	*/
 	regex := *regexp.MustCompile(`([0-2][0-9]|(3)[0-1])/(\w{3})/(\d{4}):(\d{2}):(\d{2}):(\d{2}).+geoLongitude=(-?\d+(\.\d+)?)&geoLatitude=(-?\d+(\.\d+)?)`)
+	for _, eachLine := range text[1:] {
 
-	for _, eachLine := range text {
 		res := regex.FindAllStringSubmatch(eachLine, -1)
 
 		// create time object
@@ -123,17 +132,24 @@ func main() {
 
 		// caching logic
 		key := le.coordString()
+		//fmt.Println(key, le.event.Local())
 		if tStamp, ok := cache[key]; !ok {
-			cache[key] = tStamp
+			cache[key] = le.event
 			newCount++
 		} else {
-			if le.event.Before(tStamp.Add(time.Minute * time.Duration(cacheTTL))) {
+			if cacheTTL == -1 {
 				dupCount++
-				cache[key] = le.event // update cache with new timestamp (restart TTL)?
+					cache[key] = le.event
 			} else {
-				cache[key] = le.event
-				newCount++
+				if le.event.Before(tStamp.Add(time.Minute * time.Duration(cacheTTL))) {
+					dupCount++
+					cache[key] = le.event // update cache with new timestamp (restart TTL)?
+				} else {
+					cache[key] = le.event
+					newCount++
+				}
 			}
+
 		}
 
 	}
